@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>시간 기록표</title>
+  <style>
+    @font-face {
+      font-family: 'FreeFont';
+      src: url('file:///C:/Users/name/Desktop/myproject/RepetitionScrolling.ttf') format('truetype');
+    }
+    body {
+      background-color: black;
+      color: white;
+      margin: 0;
+      padding: 0;
+      font-family: 'FreeFont', sans-serif;
+    }
+    button {
+      color: white;
+      background-color: #333;
+      border: 1px solid white;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-family: 'FreeFont', sans-serif;
+    }
+    #exportButton {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background-color: black;
+      color: white;
+      font-family: 'FreeFont', sans-serif;
+    }
+    th, td {
+      border: 1px solid white;
+      padding: 8px;
+      text-align: center;
+    }
+    th {
+      background-color: #333;
+    }
+    tr:hover {
+      background-color: #444;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      font-family: 'FreeFont', sans-serif;
+    }
+    #soundLevelHeader {
+      font-size: 16px;
+      color: yellow;
+    }
+  </style>
+</head>
+<body>
+
+  <button id="exportButton" onclick="exportToHTML()">기록 내보내기</button>
+
+  <h2>시간 기록표</h2>
+  <p>아무 키나 누르면 시간이 기록됩니다.</p>
+
+  <button id="toggleRecordButton" onclick="toggleRecording()">기록 시작</button>
+
+  <div style="margin-top: 10px;">
+    <label for="thresholdInput">소리 레벨 임계값 (0-255): </label>
+    <input type="number" id="thresholdInput" min="0" max="255" value="100">
+    <button onclick="setThreshold()">설정</button>
+  </div>
+
+  <table id="timeTable">
+    <thead>
+      <tr>
+        <th>순번</th>
+        <th>시간</th>
+        <th>시간 차이</th>
+        <th id="soundLevelHeader">소리크기: 0</th>
+        <th>메모</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    let rowCount = 0;
+    let isRecording = false;
+    let audioContext, analyser, dataArray;
+    let threshold = 100;
+    
+    function initAudio() {
+      audioContext = new AudioContext();
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 512;
+      const bufferLength = analyser.frequencyBinCount;
+      dataArray = new Uint8Array(bufferLength);
+
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+          const source = audioContext.createMediaStreamSource(stream);
+          source.connect(analyser);
+          detectSound();
+        })
+        .catch(err => {
+          console.error('오디오 장치 접근 실패:', err);
+          alert('오디오 장치에 접근할 수 없습니다.');
+        });
+    }
+
+    function detectSound() {
+      analyser.getByteFrequencyData(dataArray);
+
+      // 100Hz 이하 주파수만 추출 (예상: FFT bin당 약 86Hz)
+      let lowFreqVolume = 0;
+      let count = 0;
+      const sampleRate = audioContext.sampleRate;
+      const binSize = sampleRate / analyser.fftSize;
+
+      for (let i = 0; i < dataArray.length; i++) {
+        if (i * binSize <= 100) {
+          lowFreqVolume += dataArray[i];
+          count++;
+        } else {
+          break;
+        }
+      }
+      
+      const lowFreqAverage = count > 0 ? lowFreqVolume / count : 0;
+      document.getElementById('soundLevelHeader').textContent = `소리크기: ${Math.round(lowFreqAverage)}`;
+
+      if (lowFreqAverage > threshold && isRecording) {
+        addNewRow(lowFreqAverage);
+      }
+
+      requestAnimationFrame(detectSound);
+    }
+
+    function setThreshold() {
+      const thresholdInput = document.getElementById('thresholdInput').value;
+      threshold = parseInt(thresholdInput, 10);
+      if (isNaN(threshold)) {
+        alert('올바른 숫자를 입력해주세요.');
+        return;
+      }
+      alert(`임계값이 ${threshold}로 설정되었습니다.`);
+    }
+
+    function formatDateTime(date) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    }
+
+    function addNewRow(volume) {
+      if (!isRecording) return;
+
+      rowCount++;
+      const now = new Date();
+      const timeString = formatDateTime(now);
+      const tbody = document.querySelector('#timeTable tbody');
+      const newRow = document.createElement('tr');
+
+      newRow.innerHTML = `
+        <td>${rowCount}</td>
+        <td>${timeString}</td>
+        <td>-</td>
+        <td>${Math.round(volume)}</td>
+        <td><input type="text" placeholder="메모 입력"></td>
+      `;
+
+      tbody.insertBefore(newRow, tbody.firstChild);
+    }
+
+    document.addEventListener('keydown', function(event) {
+      if (event.key === ' ') {
+        event.preventDefault();
+        addNewRow(0);
+      }
+    });
+
+    function toggleRecording() {
+      if (audioContext && audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+      isRecording = !isRecording;
+      const button = document.getElementById('toggleRecordButton');
+      button.textContent = isRecording ? '기록 중지' : '기록 시작';
+    }
+
+    window.onload = function() {
+      initAudio();
+    };
+
+    function exportToHTML() {
+      const table = document.getElementById('timeTable');
+      const clonedTable = table.cloneNode(true);
+      clonedTable.querySelectorAll('input').forEach(input => {
+        input.setAttribute('value', input.value);
+      });
+
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html lang="ko">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>시간 기록표 내보내기</title>
+          <style>
+            table { width: 100%; border-collapse: collapse; background-color: black; color: white; }
+            th, td { border: 1px solid white; padding: 8px; text-align: center; }
+            th { background-color: #333; }
+          </style>
+        </head>
+        <body>
+          ${clonedTable.outerHTML}
+        </body>
+        </html>
+      `;
+
+      const blob = new Blob([htmlContent], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = '시간_기록표.html';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>
