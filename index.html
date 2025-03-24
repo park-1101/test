@@ -324,7 +324,7 @@
       splitter = audioContext.createChannelSplitter(2);
 
       try {
-        await audioContext.audioWorklet.addModule('/audio-processor.js');
+        await audioContext.audioWorklet.addModule('./audio-processor.js');
         console.log('AudioWorklet module added successfully');
       } catch (err) {
         console.error('AudioWorklet 모듈 등록 실패:', err.name, err.message);
