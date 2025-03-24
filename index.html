@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>시간 기록표 및 소리 요약 그래프 (Canvas + AudioWorklet)</title>
+  <style>
+    @font-face {
+      font-family: 'FreeFont';
+      src: url('./RepetitionScrolling.ttf') format('truetype');
+    }
+    body {
+      background-color: black;
+      color: white;
+      margin: 0;
+      padding: 0;
+      font-family: 'FreeFont', sans-serif;
+      transition: background-color 0.5s ease;
+    }
+    button {
+      color: white;
+      background-color: #333;
+      border: 1px solid white;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-family: 'FreeFont', sans-serif;
+    }
+    #exportButton {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+    }
+    table {
+      width: 100%;
+      max-width: 100%;
+      border-collapse: collapse;
+      background-color: black;
+      color: white;
+      font-family: 'FreeFont', sans-serif;
+      table-layout: fixed;
+    }
+    th, td {
+      border: 1px solid white;
+      padding: 8px;
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    th {
+      background-color: #333;
+    }
+    tr:hover {
+      background-color: #444;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      font-family: 'FreeFont', sans-serif;
+    }
+    #popup {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background-color: white;
+      padding: 20px;
+      border: 1px solid #ccc;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+      font-family: 'FreeFont', sans-serif;
+    }
+    #popup input {
+      width: 200px;
+      margin: 5px;
+    }
+    #popup button {
+      margin-top: 10px;
+    }
+    #timeDisplay, #timeDifferenceDisplay {
+      margin-left: 10px;
+      font-size: 16px;
+      color: white;
+    }
+    #timeTable th:nth-child(1), #timeTable td:nth-child(1) {
+      width: 50px;
+      min-width: 50px;
+      max-width: 50px;
+    }
+    #timeTable th:nth-child(2), #timeTable td:nth-child(2) {
+      width: 300px;
+      min-width: 300px;
+      max-width: 300px;
+    }
+    #timeTable th:nth-child(3), #timeTable td:nth-child(3) {
+      width: 210px;
+      min-width: 210px;
+      max-width: 210px;
+    }
+    #timeTable th:nth-child(4), #timeTable td:nth-child(4) {
+      width: 110px;
+      min-width: 110px;
+      max-width: 110px;
+    }
+    #realTimeDb {
+      display: inline-block;
+      width: 70px;
+      text-align: right;
+      font-weight: bold;
+      color: #ffcc00;
+    }
+    #soundLevelInfo {
+      margin-top: 10px;
+      color: white;
+      line-height: 1.5;
+    }
+    #soundLevelInfo div {
+      margin: 5px 0;
+    }
+    #thresholdInput {
+      width: 80px;
+    }
+    #graphContainer, #summaryGraphContainer {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 600px;
+    }
+    #dBDisplay {
+      font-size: 18px;
+      margin-bottom: 10px;
+    }
+    canvas {
+      border: 1px solid white;
+    }
+  </style>
+</head>
+<body>
+  <button id="exportButton" onclick="exportToHTML()">기록 내보내기</button>
+  <h2>시간 기록표</h2>
+  <p>ppt리모콘 사용, [마이크]'사용 안함' 하면 [라인입력]인식</p>
+  <div style="display: flex; align-items: center;">
+    <button onclick="openPopup()">시간 입력</button>
+    <span id="timeDisplay"></span>
+    <span id="timeDifferenceDisplay"></span>
+  </div>
+  <button id="toggleRecordButton" onclick="toggleRecording()">기록 시작</button>
+  <div style="margin-top: 10px;">
+    <label for="thresholdInput">초과값 (dB): </label>
+    <input type="number" id="thresholdInput" min="0" max="100" value="22">
+    <button onclick="setThreshold()">설정</button>
+  </div>
+  <div id="soundLevelInfo">
+    <div>
+      최근 30초 최소 dB: <span id="minDbDisplay">초기화 중...</span> + 
+      초과값: <span id="thresholdValueDisplay">22</span>dB = 
+      임계값 <span id="calculatedThresholdDisplay">0</span>dB
+    </div>
+    <div>
+      최근 30초 최대 dB: <span id="maxDbDisplay">초기화 중...</span>
+      <span id="elapsedTimeDisplay" style="margin-left:10px">0초</span>
+    </div>
+    <div>
+      최근 5분 최대 dB: <span id="maxDb5MinDisplay">초기화 중...</span>
+      <span id="elapsedTime5MinDisplay" style="margin-left:10px">0초</span>
+    </div>
+  </div>
+  <div id="graphContainer">
+    <div id="dBDisplay">Left dB: 0 | Right dB: 0</div>
+    <canvas id="graph" width="600" height="200"></canvas>
+  </div>
+  <div id="summaryGraphContainer">
+    <canvas id="summaryGraph" width="600" height="200"></canvas>
+  </div>
+  <table id="timeTable">
+    <thead>
+      <tr>
+        <th>순번</th>
+        <th id="currentTimeHeader">시간</th>
+        <th>시간 차이</th>
+        <th id="soundLevelHeader"><span id="realTimeDb">0.00</span> dB</th>
+        <th>메모</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <div id="popup">
+    <h3>시간 입력</h3>
+    <input id="timeInput" placeholder="YYYY-MM-DD HH:MM:SS.SSS">
+    <br>
+    <button onclick="applyTime()">적용</button>
+    <button onclick="closePopup()">닫기</button>
+  </div>
+
+  <script>
+    let rowCount = 0;
+    let isRecording = false;
+    let audioContext, splitter;
+    let threshold = 22;
+    let activeEvents = [];
+    let tracker;
+    const numBars = 300;
+    let graphData = new Array(numBars).fill({ leftDb: -Infinity, rightDb: -Infinity });
+    let graphIndex = 0;
+    const maxSummaryBars = 300;
+    let summaryMaxValues = new Array(maxSummaryBars).fill(-Infinity);
+    let summaryIndex = 0;
+    const summaryInterval = 30000;
+    let lastIntervalTime = performance.now();
+    let currentIntervalMax = -Infinity;
+    let dbBufferLeft = [];
+    let dbBufferRight = [];
+
+    const graphCanvas = document.getElementById('graph');
+    const graphCtx = graphCanvas.getContext('2d');
+    const summaryCanvas = document.getElementById('summaryGraph');
+    const summaryCtx = summaryCanvas.getContext('2d');
+    const dBDisplay = document.getElementById('dBDisplay');
+    const graphBarWidth = 600 / numBars;
+    const summaryBarWidth = 600 / maxSummaryBars;
+
+    let worker;
+
+    class MinMaxDBTracker {
+      constructor() {
+        this.minValues = [];
+        this.maxValues = [];
+        this.maxValues5Min = [];
+        this.currentSecondMin = Infinity;
+        this.currentSecondMax = -Infinity;
+        this.startTime = performance.now();
+        this.lastSecondTime = performance.now();
+        this.initialDelay = 3000;
+      }
+
+      addValue(db) {
+        const now = performance.now();
+        if (now - this.startTime < this.initialDelay) return;
+        if (db < this.currentSecondMin) this.currentSecondMin = db;
+        if (db > this.currentSecondMax) this.currentSecondMax = db;
+        if (now - this.lastSecondTime >= 1000) {
+          const newEntry = { value: this.currentSecondMax, time: now };
+          this.minValues.push({ value: this.currentSecondMin, time: now });
+          this.maxValues.push(newEntry);
+          this.maxValues5Min.push(newEntry);
+          const filterTime30s = now - 30000;
+          const filterTime5Min = now - 300000;
+          this.minValues = this.minValues.filter(entry => entry.time >= filterTime30s);
+          this.maxValues = this.maxValues.filter(entry => entry.time >= filterTime30s);
+          this.maxValues5Min = this.maxValues5Min.filter(entry => entry.time >= filterTime5Min);
+          this.currentSecondMin = Infinity;
+          this.currentSecondMax = -Infinity;
+          this.lastSecondTime = now;
+        }
+      }
+
+      getGlobalMin() {
+        if (this.minValues.length === 0) return { value: 0, time: performance.now() };
+        return this.minValues.reduce((acc, cur) => cur.value < acc.value ? cur : acc);
+      }
+
+      getGlobalMax() {
+        if (this.maxValues.length === 0) return { value: 0, time: performance.now() };
+        return this.maxValues.reduce((acc, cur) => cur.value > acc.value ? cur : acc);
+      }
+
+      getGlobalMax5Min() {
+        if (this.maxValues5Min.length === 0) return { value: 0, time: performance.now() };
+        return this.maxValues5Min.reduce((acc, cur) => cur.value > acc.value ? cur : acc);
+      }
+    }
+
+    function updateThresholdDisplay() {
+      const globalMin = tracker.getGlobalMin();
+      const minDb = globalMin.value;
+      const calculatedThreshold = minDb !== Infinity ? minDb + threshold : threshold;
+      document.getElementById('calculatedThresholdDisplay').textContent = calculatedThreshold.toFixed(2);
+    }
+
+    function formatDateTime(date) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
+    }
+
+    function calculateTimeDifference(currentTime, userInputTime) {
+      const currentDate = new Date(currentTime);
+      const userInputDate = new Date(userInputTime);
+      if (isNaN(userInputDate.getTime())) return `유효하지 않은 시간 (${userInputTime})`;
+      const differenceInMilliseconds = (currentDate - userInputDate);
+      const differenceInSeconds = differenceInMilliseconds / 1000;
+      const days = Math.floor(Math.abs(differenceInSeconds) / (3600 * 24));
+      const hours = Math.floor((Math.abs(differenceInSeconds) % (3600 * 24)) / 3600);
+      const minutes = Math.floor((Math.abs(differenceInSeconds) % 3600) / 60);
+      const seconds = Math.floor(Math.abs(differenceInSeconds) % 60);
+      const milliseconds = Math.abs(differenceInMilliseconds) % 1000;
+      const sign = differenceInMilliseconds >= 0 ? '+' : '-';
+      return `${sign}${days}D ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(milliseconds).padStart(3, '0')}`;
+    }
+
+    function updateTable() {
+      const tbody = document.querySelector('#timeTable tbody');
+      const rows = tbody.querySelectorAll('tr');
+      const userInputTime = document.querySelector('#timeInput').value || '';
+      rows.forEach(row => {
+        const currentTime = row.querySelector('td:nth-child(2)').textContent;
+        const timeDifference = calculateTimeDifference(currentTime, userInputTime);
+        row.querySelector('td:nth-child(3)').textContent = timeDifference;
+      });
+    }
+
+    async function initAudio() {
+      if (audioContext) return;
+      audioContext = new AudioContext();
+      await audioContext.resume();
+      console.log('AudioContext state:', audioContext.state);
+      splitter = audioContext.createChannelSplitter(2);
+
+      try {
+        await audioContext.audioWorklet.addModule('./audio-processor.js');
+        console.log('AudioWorklet module loaded');
+      } catch (err) {
+        console.error('AudioWorklet 모듈 로드 실패:', err);
+        alert(`AudioWorklet 초기화 실패: ${err.message}`);
+        return;
+      }
+
+      navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 2,
+          autoGainControl: false,
+          echoCancellation: false,
+          noiseSuppression: false
+        }
+      })
+      .then(stream => {
+        console.log('getUserMedia success, stream active:', stream.active);
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(splitter);
+
+        const workletNode = new AudioWorkletNode(audioContext, 'audio-processor');
+        splitter.connect(workletNode, 0, 0);
+        splitter.connect(workletNode, 1, 0);
+        workletNode.connect(audioContext.destination);
+
+        workletNode.port.onmessage = handleWorkerMessage;
+        worker = workletNode;
+        console.log('AudioWorklet initialized');
+        startGraphUpdate();
+      })
+      .catch(err => {
+        console.error('getUserMedia 실패:', err);
+        alert('오디오 장치 접근 실패: ' + err.message);
+      });
+      tracker = new MinMaxDBTracker();
+    }
+
+    function handleWorkerMessage(e) {
+      console.log('Message from AudioWorklet:', e.data);
+      const { type, data } = e.data;
+      if (type === 'audioData') {
+        const { leftMaxDb, rightMaxDb, maxDb, timestamp } = data;
+        console.log('Received dB:', { leftMaxDb, rightMaxDb, maxDb });
+        document.getElementById('realTimeDb').textContent = maxDb.toFixed(2);
+        tracker.addValue(maxDb);
+
+        dbBufferLeft.push(leftMaxDb);
+        dbBufferRight.push(rightMaxDb);
+        console.log('Buffer updated:', { leftBufferLength: dbBufferLeft.length, rightBufferLength: dbBufferRight.length });
+
+        const now = performance.now();
+        if (isRecording && maxDb > currentIntervalMax) currentIntervalMax = maxDb;
+        if (now - lastIntervalTime >= summaryInterval) {
+          summaryMaxValues[summaryIndex] = currentIntervalMax;
+          summaryIndex = (summaryIndex + 1) % maxSummaryBars;
+          currentIntervalMax = -Infinity;
+          lastIntervalTime = now;
+          drawSummaryGraph();
+        }
+
+        const globalMin = tracker.getGlobalMin();
+        const globalMax = tracker.getGlobalMax();
+        const globalMax5Min = tracker.getGlobalMax5Min();
+        document.getElementById('minDbDisplay').textContent = globalMin.value !== Infinity ? globalMin.value.toFixed(2) : '초기화 중...';
+        document.getElementById('maxDbDisplay').textContent = globalMax.value !== -Infinity ? globalMax.value.toFixed(2) : '초기화 중...';
+        document.getElementById('maxDb5MinDisplay').textContent = globalMax5Min.value !== -Infinity ? globalMax5Min.value.toFixed(2) : '초기화 중...';
+        updateThresholdDisplay();
+        const elapsedSeconds = Math.floor((now - globalMax.time) / 1000);
+        const elapsed5MinSeconds = Math.floor((now - globalMax5Min.time) / 1000);
+        document.getElementById('elapsedTimeDisplay').textContent = `${elapsedSeconds}초`;
+        document.getElementById('elapsedTime5MinDisplay').textContent = `${elapsed5MinSeconds}초`;
+
+        const minDb = globalMin.value;
+        const dynamicThreshold = minDb !== Infinity ? minDb + threshold : threshold;
+        if (maxDb > dynamicThreshold && isRecording) {
+          if (!activeEvents.length || now - activeEvents[activeEvents.length - 1].startTime > 500) {
+            const timeRow = addTimeRow();
+            activeEvents.push({
+              startTime: now,
+              buffer: [maxDb],
+              row: timeRow
+            });
+          }
+        }
+        for (let i = activeEvents.length - 1; i >= 0; i--) {
+          const event = activeEvents[i];
+          if (now - event.startTime < 500) {
+            event.buffer.push(maxDb);
+          } else {
+            const finalMax = Math.max(...event.buffer);
+            event.row.cells[3].textContent = finalMax.toFixed(2);
+            activeEvents.splice(i, 1);
+          }
+        }
+      }
+    }
+
+    function startGraphUpdate() {
+      console.log('Starting graph update interval');
+      setInterval(() => {
+        console.log('Interval tick, buffer lengths:', dbBufferLeft.length, dbBufferRight.length);
+        if (dbBufferLeft.length > 0 && dbBufferRight.length > 0) {
+          const maxLeftDb = Math.max(...dbBufferLeft);
+          const maxRightDb = Math.max(...dbBufferRight);
+          graphData[graphIndex] = { leftDb: maxLeftDb, rightDb: maxRightDb };
+          graphIndex = (graphIndex + 1) % numBars;
+          dBDisplay.textContent = `Left dB: ${maxLeftDb.toFixed(2)} | Right dB: ${maxRightDb.toFixed(2)}`;
+          drawGraph();
+          dbBufferLeft = [];
+          dbBufferRight = [];
+          console.log(`Graph updated: index=${graphIndex}`);
+        } else {
+          console.log('No data in buffers');
+        }
+      }, 100);
+    }
+
+    function calculateHeight(dB) {
+      console.log('Calculating height for dB:', dB);
+      const normalized = Math.min(Math.max((dB + 100) / 120, 0), 1);
+      const height = normalized * 200;
+      console.log('Height:', height);
+      return height;
+    }
+
+    function drawGraph() {
+      graphCtx.clearRect(0, 0, graphCanvas.width, graphCanvas.height);
+      graphCtx.fillStyle = 'green';
+      graphCtx.fillRect(0, graphCanvas.height - 40, graphCanvas.width, 40);
+
+      for (let i = 0; i < numBars; i++) {
+        const { leftDb, rightDb } = graphData[i];
+        const x = i * graphBarWidth;
+        const leftHeight = calculateHeight(leftDb);
+        const rightHeight = calculateHeight(rightDb);
+        const overlapHeight = Math.min(leftHeight, rightHeight);
+
+        graphCtx.fillStyle = '#9400d3';
+        graphCtx.fillRect(x, graphCanvas.height - overlapHeight, graphBarWidth, overlapHeight);
+
+        graphCtx.fillStyle = i === (graphIndex - 1 + numBars) % numBars ? '#ff6666' : '#ff0000';
+        graphCtx.fillRect(x, graphCanvas.height - leftHeight, graphBarWidth, leftHeight);
+
+        graphCtx.fillStyle = i === (graphIndex - 1 + numBars) % numBars ? '#D2F0FA' : '#87CEEB';
+        graphCtx.fillRect(x, graphCanvas.height - rightHeight, graphBarWidth, rightHeight);
+      }
+    }
+
+    function drawSummaryGraph() {
+      summaryCtx.clearRect(0, 0, summaryCanvas.width, summaryCanvas.height);
+
+      for (let i = 0; i < maxSummaryBars; i++) {
+        const maxDb = summaryMaxValues[i];
+        const height = calculateHeight(maxDb);
+        const x = i * summaryBarWidth;
+        summaryCtx.fillStyle = i === (summaryIndex - 1 + maxSummaryBars) % maxSummaryBars ? '#ff6666' : '#ff0000';
+        summaryCtx.fillRect(x, summaryCanvas.height - height, summaryBarWidth, height);
+      }
+    }
+
+    function addTimeRow() {
+      const now = new Date();
+      const timeString = formatDateTime(now);
+      const newRow = document.createElement('tr');
+      rowCount++;
+      newRow.innerHTML = `
+        <td>${rowCount}</td>
+        <td>${timeString}</td>
+        <td>${calculateTimeDifference(timeString, document.querySelector('#timeInput').value)}</td>
+        <td>...</td>
+        <td><input type="text" placeholder="메모 입력"></td>
+      `;
+      document.querySelector('#timeTable tbody').prepend(newRow);
+      return newRow;
+    }
+
+    function toggleRecording() {
+      if (!audioContext) {
+        initAudio().then(() => {
+          isRecording = !isRecording;
+          const button = document.getElementById('toggleRecordButton');
+          button.textContent = isRecording ? '기록 중지' : '기록 시작';
+          button.style.backgroundColor = isRecording ? '#006400' : '#8B4513';
+          if (worker) worker.port.postMessage({ type: 'toggleRecording', data: { isRecording } });
+        });
+      } else if (audioContext.state === 'suspended') {
+        audioContext.resume().then(() => {
+          isRecording = !isRecording;
+          const button = document.getElementById('toggleRecordButton');
+          button.textContent = isRecording ? '기록 중지' : '기록 시작';
+          button.style.backgroundColor = isRecording ? '#006400' : '#8B4513';
+          if (worker) worker.port.postMessage({ type: 'toggleRecording', data: { isRecording } });
+        });
+      } else {
+        isRecording = !isRecording;
+        const button = document.getElementById('toggleRecordButton');
+        button.textContent = isRecording ? '기록 중지' : '기록 시작';
+        button.style.backgroundColor = isRecording ? '#006400' : '#8B4513';
+        if (worker) worker.port.postMessage({ type: 'toggleRecording', data: { isRecording } });
+      }
+    }
+
+    function openPopup() { document.getElementById('popup').style.display = 'block'; }
+    function closePopup() { document.getElementById('popup').style.display = 'none'; }
+
+    function applyTime() {
+      const timeInput = document.getElementById('timeInput').value;
+      const userInputTime = new Date(timeInput);
+      if (isNaN(userInputTime.getTime())) alert('유효하지 않은 시간 형식입니다.');
+      else closePopup();
+    }
+
+    function exportToHTML() {
+      const tableHTML = document.querySelector('table').outerHTML;
+      const htmlContent = `<html><head><meta charset="UTF-8"><title>기록 내보내기</title></head><body>${tableHTML}</body></html>`;
+      const blob = new Blob([htmlContent], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = '기록.html';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function updateCurrentTime() {
+      const now = new Date();
+      const timeString = formatDateTime(now);
+      document.getElementById('currentTimeHeader').textContent = timeString;
+      const userInputTime = document.getElementById('timeInput').value;
+      if (userInputTime) {
+        const timeDifference = calculateTimeDifference(timeString, userInputTime);
+        document.querySelector('#timeTable th:nth-child(3)').textContent = timeDifference;
+        document.getElementById('timeDifferenceDisplay').textContent = timeDifference;
+      }
+    }
+
+    function setThreshold() {
+      const thresholdInput = document.getElementById('thresholdInput').value;
+      threshold = parseFloat(thresholdInput);
+      if (!isNaN(threshold)) {
+        document.getElementById('thresholdValueDisplay').textContent = threshold;
+        updateThresholdDisplay();
+        if (worker) worker.port.postMessage({ type: 'setThreshold', data: { threshold } });
+        alert(`초과값이 ${threshold} dB로 설정되었습니다.`);
+      } else {
+        alert('올바른 숫자를 입력해주세요.');
+      }
+    }
+
+    window.onload = function() {
+      const now = new Date();
+      const timeString = formatDateTime(now);
+      document.getElementById('timeInput').value = timeString;
+      document.getElementById('timeDisplay').textContent = timeString;
+      document.getElementById('toggleRecordButton').style.backgroundColor = '#8B4513';
+    };
+
+    window.addEventListener('blur', () => document.body.style.backgroundColor = '#298A08');
+    window.addEventListener('focus', () => document.body.style.backgroundColor = 'black');
+    setInterval(updateCurrentTime, 50);
+  </script>
+</body>
+</html>
