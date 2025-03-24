@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>250324 1158 시간 기록표 및 소리 요약 그래프 (Canvas + 덮어쓰기 원형 버퍼)</title>
+  <title>250324 1201 시간 기록표 및 소리 요약 그래프 (Canvas + 덮어쓰기 원형 버퍼)</title>
   <style>
     @font-face {
       font-family: 'FreeFont';
@@ -351,7 +351,7 @@
     }
 
     function calculateHeight(dB) {
-      const normalized = Math.min(Math.max((dB + 50) / 100, 0), 1);
+      const normalized = Math.min(Math.max((dB + 90) / 100, 0), 1);
       return normalized * 400; // Canvas 높이 200px에 맞춤
     }
 
